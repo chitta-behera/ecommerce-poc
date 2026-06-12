@@ -86,10 +86,18 @@ jobs:
           # Python 3.12
           if ! command -v python3.12 &>/dev/null; then
             log "Installing Python 3.12..."
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common -q
-            sudo add-apt-repository ppa:deadsnakes/python -y
             sudo apt-get update -q
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv python3.12-dev -q
+            # Ubuntu 24.04+ has Python 3.12 in default repos; try that first
+            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv python3.12-dev -q 2>/dev/null; then
+              log "Python 3.12 installed from default repos."
+            else
+              # Ubuntu 22.04 fallback: use deadsnakes PPA
+              log "Default repos missing Python 3.12, adding deadsnakes PPA..."
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common -q
+              sudo add-apt-repository ppa:deadsnakes/python -y
+              sudo apt-get update -q
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv python3.12-dev -q
+            fi
           fi
           log "Python: $(python3.12 --version)"
 
