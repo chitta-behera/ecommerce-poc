@@ -1,0 +1,59 @@
+name: Manual Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for rollback (will appear in workflow logs)"
+        required: true
+        default: "Unspecified"
+
+env:
+  APP_DIR: /opt/ecommerce-poc
+  APP_PORT: "8000"
+
+jobs:
+  rollback:
+    name: Rollback Production
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Log rollback intent
+        run: |
+          echo "Rollback triggered by : ${{ github.actor }}"
+          echo "Reason                : ${{ github.event.inputs.reason }}"
+          echo "Timestamp             : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+      - name: Execute rollback on EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" \
+              "bash ${{ env.APP_DIR }}/scripts/rollback.sh"
+
+      - name: Verify service after rollback
+        run: |
+          sleep 5
+          STATUS=$(ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" \
+            "curl -s -o /dev/null -w '%{http_code}' http://localhost:${{ env.APP_PORT }}/health" \
+            2>/dev/null || echo "000")
+          if [ "$STATUS" = "200" ]; then
+            echo "Post-rollback health check passed (HTTP 200)."
+          else
+            echo "::error::Post-rollback health check failed (HTTP $STATUS). Manual intervention required."
+            exit 1
+          fi
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

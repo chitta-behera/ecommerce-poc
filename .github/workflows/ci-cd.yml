@@ -1,0 +1,150 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+  APP_DIR: /opt/ecommerce-poc
+  APP_PORT: "8000"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # CI — Run tests on every push and pull request
+  # ─────────────────────────────────────────────────────────────────────────
+  test:
+    name: Test (Python ${{ env.PYTHON_VERSION }})
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short --junitxml=test-results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: test-results.xml
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # CD — Deploy to EC2 on push to main (only after tests pass)
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment:
+      name: production
+      url: http://${{ secrets.EC2_HOST }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Generate release identifier
+        id: vars
+        run: echo "release=$(date +%Y%m%d_%H%M%S)_${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release directory on EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" \
+              "mkdir -p ${{ env.APP_DIR }}/releases/${{ steps.vars.outputs.release }}"
+
+      - name: Sync application files to EC2
+        run: |
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.venv/' \
+            --exclude='**/__pycache__/' \
+            --exclude='**/*.pyc' \
+            --exclude='.pytest_cache/' \
+            --exclude='test-results.xml' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            ./ "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:${{ env.APP_DIR }}/releases/${{ steps.vars.outputs.release }}/"
+
+      - name: Run deployment script on EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" \
+              "bash ${{ env.APP_DIR }}/releases/${{ steps.vars.outputs.release }}/scripts/deploy.sh \
+               ${{ steps.vars.outputs.release }}"
+
+      - name: Health check (30s window, 6 retries)
+        run: |
+          for i in $(seq 1 6); do
+            STATUS=$(ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" \
+              "curl -s -o /dev/null -w '%{http_code}' http://localhost:${{ env.APP_PORT }}/health" \
+              2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed (attempt $i/6)"
+              exit 0
+            fi
+            echo "Attempt $i/6: HTTP $STATUS — retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::Health check failed after 30s — triggering rollback"
+          exit 1
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" 'bash -s' << 'ROLLBACK'
+          set -e
+          APP_DIR=/opt/ecommerce-poc
+          PREV_FILE="$APP_DIR/.previous_release"
+          if [ ! -f "$PREV_FILE" ]; then
+            echo "No previous release recorded — skipping automatic rollback."
+            exit 0
+          fi
+          PREV=$(cat "$PREV_FILE")
+          if [ ! -d "$PREV" ]; then
+            echo "Previous release directory not found: $PREV"
+            exit 1
+          fi
+          echo "Rolling back to: $PREV"
+          ln -sfn "$PREV" "$APP_DIR/current"
+          sudo systemctl restart ecommerce-poc
+          echo "Rollback complete."
+          ROLLBACK
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

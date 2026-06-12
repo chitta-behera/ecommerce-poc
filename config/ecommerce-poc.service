@@ -1,0 +1,40 @@
+[Unit]
+Description=E-commerce POC — FastAPI / Uvicorn application
+Documentation=https://github.com/chitta-behera/ecommerce-poc
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/ecommerce-poc/current
+
+# Adjust --workers to (2 * vCPU_count) + 1. For t2.micro (1 vCPU) use 2.
+ExecStart=/opt/ecommerce-poc/current/.venv/bin/uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info
+
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+# Route all output to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ecommerce-poc
+
+[Install]
+WantedBy=multi-user.target
