@@ -1,0 +1,1153 @@
+openapi: "3.0.3"
+info:
+  title: E-commerce POC API
+  version: "1.0.0"
+  description: |
+    A Proof of Concept for a scalable e-commerce backend built with Python 3.12, FastAPI,
+    and Pydantic v2.
+
+    All data is held **in-memory** (no persistent database); storage resets on every restart.
+    The layered architecture (API → Service → Repository → Domain Model) is designed for
+    easy migration to PostgreSQL + SQLAlchemy.
+
+    ## Authentication
+    No authentication or authorisation is currently implemented. All endpoints are public.
+
+    ## Error format
+    Most errors return a standard FastAPI `{"detail": "..."}` body.
+    Pydantic validation failures return `{"detail": [{loc, msg, type}]}`.
+    See the `ErrorDetail` and `ValidationError` schemas in Components.
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: Health
+    description: Application liveness checks.
+  - name: Categories
+    description: Manage product categories.
+  - name: Products
+    description: Manage the product catalogue.
+  - name: Customers
+    description: Manage customer accounts.
+  - name: Orders
+    description: Place and manage orders.
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  # ── Root ──────────────────────────────────────────────────────────────────
+  /:
+    get:
+      summary: Root
+      description: Returns a welcome message. Useful for confirming the server is reachable.
+      operationId: read_root
+      tags:
+        - Health
+      responses:
+        "200":
+          description: Welcome message.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+              example:
+                message: Welcome to the E-commerce POC API
+
+  # ── Health ────────────────────────────────────────────────────────────────
+  /health:
+    get:
+      summary: Check application health
+      description: |
+        Returns the current health status of the application.
+        In a production setup this would additionally probe the database and cache.
+      operationId: health_check
+      tags:
+        - Health
+      responses:
+        "200":
+          description: Application is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              example:
+                status: ok
+
+  # ── Categories ────────────────────────────────────────────────────────────
+  /api/v1/categories/:
+    get:
+      summary: Get all categories
+      description: Returns every category currently stored in the system.
+      operationId: read_categories
+      tags:
+        - Categories
+      responses:
+        "200":
+          description: A list of categories (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+              examples:
+                seed_data:
+                  summary: Two seed categories
+                  value:
+                    - id: 1
+                      name: Electronics
+                      description: Gadgets and devices
+                    - id: 2
+                      name: Books
+                      description: Paperback and hardcovers
+
+    post:
+      summary: Create a new category
+      description: Creates a new product category and returns the persisted resource.
+      operationId: create_category
+      tags:
+        - Categories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryCreate"
+            example:
+              name: Electronics
+              description: Gadgets and devices
+      responses:
+        "201":
+          description: Category created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+              example:
+                id: 1
+                name: Electronics
+                description: Gadgets and devices
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /api/v1/categories/{category_id}:
+    parameters:
+      - $ref: "#/components/parameters/CategoryId"
+    get:
+      summary: Get a category by ID
+      description: Retrieves a single category by its integer identifier.
+      operationId: read_category
+      tags:
+        - Categories
+      responses:
+        "200":
+          description: Category found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+              example:
+                id: 1
+                name: Electronics
+                description: Gadgets and devices
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      summary: Update a category
+      description: |
+        Updates one or more fields of an existing category.
+        Only provided fields are changed; omitted fields retain their current values.
+      operationId: update_category
+      tags:
+        - Categories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryUpdate"
+            example:
+              name: Consumer Electronics
+              description: All consumer electronics and accessories
+      responses:
+        "200":
+          description: Category updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    delete:
+      summary: Delete a category
+      description: |
+        Permanently removes a category.
+        **Note:** Products belonging to this category are **not** automatically deleted.
+      operationId: delete_category
+      tags:
+        - Categories
+      responses:
+        "204":
+          description: Category deleted. No response body.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Products ──────────────────────────────────────────────────────────────
+  /api/v1/products/:
+    get:
+      summary: Get all products
+      description: Returns every product in the catalogue, each with its nested category object.
+      operationId: read_products
+      tags:
+        - Products
+      responses:
+        "200":
+          description: A list of products (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Product"
+              examples:
+                single_product:
+                  summary: Single electronics product
+                  value:
+                    - id: 1
+                      name: Smartphone
+                      description: Latest model
+                      price: 699.99
+                      sku: PHN-123
+                      category:
+                        id: 1
+                        name: Electronics
+                        description: Gadgets and devices
+
+    post:
+      summary: Create a new product
+      description: |
+        Creates a new product and links it to an existing category.
+        Returns **422** if the specified `category_id` does not exist.
+      operationId: create_product
+      tags:
+        - Products
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductCreate"
+            example:
+              name: Smartphone
+              description: Latest model
+              price: 699.99
+              sku: PHN-123
+              category_id: 1
+      responses:
+        "201":
+          description: Product created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /api/v1/products/{product_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProductId"
+    get:
+      summary: Get a product by ID
+      description: Retrieves a single product, including its nested category object.
+      operationId: read_product
+      tags:
+        - Products
+      responses:
+        "200":
+          description: Product found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      summary: Update a product
+      description: |
+        Updates one or more fields of an existing product. All body fields are optional.
+        If `category_id` is supplied, it must reference a valid category — otherwise **422**.
+      operationId: update_product
+      tags:
+        - Products
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductUpdate"
+            example:
+              name: Flagship Smartphone
+              price: 799.99
+      responses:
+        "200":
+          description: Product updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    delete:
+      summary: Delete a product
+      description: Permanently removes a product from the catalogue.
+      operationId: delete_product
+      tags:
+        - Products
+      responses:
+        "204":
+          description: Product deleted. No response body.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Customers ─────────────────────────────────────────────────────────────
+  /api/v1/customers/:
+    get:
+      summary: Get all customers
+      description: Returns every registered customer.
+      operationId: read_customers
+      tags:
+        - Customers
+      responses:
+        "200":
+          description: A list of customers (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Customer"
+              examples:
+                seed_data:
+                  summary: Two seed customers
+                  value:
+                    - id: 1
+                      first_name: John
+                      last_name: Doe
+                      email: john.doe@example.com
+                      phone: null
+                    - id: 2
+                      first_name: Jane
+                      last_name: Smith
+                      email: jane.smith@example.com
+                      phone: null
+
+    post:
+      summary: Create a new customer
+      description: Registers a new customer. The `email` field must be a valid RFC 5322 address.
+      operationId: create_customer
+      tags:
+        - Customers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerCreate"
+            example:
+              first_name: John
+              last_name: Doe
+              email: john.doe@example.com
+              phone: "+1-555-0100"
+      responses:
+        "201":
+          description: Customer created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+              example:
+                id: 1
+                first_name: John
+                last_name: Doe
+                email: john.doe@example.com
+                phone: "+1-555-0100"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /api/v1/customers/{customer_id}:
+    parameters:
+      - $ref: "#/components/parameters/CustomerId"
+    get:
+      summary: Get a customer by ID
+      description: Retrieves a single customer by their integer identifier.
+      operationId: read_customer
+      tags:
+        - Customers
+      responses:
+        "200":
+          description: Customer found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      summary: Update a customer
+      description: Updates one or more fields of an existing customer. All body fields are optional.
+      operationId: update_customer
+      tags:
+        - Customers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerUpdate"
+            example:
+              email: newemail@example.com
+              phone: "+1-555-9999"
+      responses:
+        "200":
+          description: Customer updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    delete:
+      summary: Delete a customer
+      description: Permanently removes a customer account.
+      operationId: delete_customer
+      tags:
+        - Customers
+      responses:
+        "204":
+          description: Customer deleted. No response body.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Orders ────────────────────────────────────────────────────────────────
+  /api/v1/orders/:
+    get:
+      summary: Get all orders
+      description: Returns every order with all line items and their associated products fully populated.
+      operationId: read_orders
+      tags:
+        - Orders
+      responses:
+        "200":
+          description: A list of orders (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Order"
+
+    post:
+      summary: Create a new order
+      description: |
+        Places a new order on behalf of a customer.
+
+        - `customer_id` must reference an existing customer; otherwise **422**.
+        - Each item's `product_id` must reference an existing product; otherwise **422**.
+        - The `price` captured per line item reflects the product price **at the moment of order creation** (price snapshot).
+        - `status` defaults to `pending` if omitted.
+      operationId: create_order
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderCreate"
+            example:
+              customer_id: 1
+              status: pending
+              items:
+                - product_id: 1
+                  quantity: 1
+                - product_id: 3
+                  quantity: 2
+      responses:
+        "201":
+          description: Order created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /api/v1/orders/{order_id}:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    get:
+      summary: Get an order by ID
+      description: Retrieves a single order including all line items, their product details, and order metadata.
+      operationId: read_order
+      tags:
+        - Orders
+      responses:
+        "200":
+          description: Order found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    delete:
+      summary: Delete an order
+      description: Permanently removes an order **and all its associated line items**.
+      operationId: delete_order
+      tags:
+        - Orders
+      responses:
+        "204":
+          description: Order deleted. No response body.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/orders/{order_id}/status:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    put:
+      summary: Update an order's status
+      description: |
+        Transitions an order to a new lifecycle status.
+
+        No state-machine rules are enforced — any status value can be set regardless
+        of the current status.
+
+        | Value        | Meaning                             |
+        |--------------|-------------------------------------|
+        | `pending`    | Order received, not yet processed.  |
+        | `processing` | Order is being prepared.            |
+        | `shipped`    | Order dispatched to carrier.        |
+        | `delivered`  | Order received by customer.         |
+        | `canceled`   | Order cancelled.                    |
+
+        > **Implementation note:** The request body is typed as `dict[str, str]` in the
+        > FastAPI route (not a Pydantic model), so the `status` value is **not** validated
+        > against the `OrderStatus` enum at the HTTP layer. An invalid enum value will cause
+        > a runtime error in the service layer rather than a structured 422.
+      operationId: update_order_status
+      tags:
+        - Orders
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OrderStatusUpdate"
+            examples:
+              ship:
+                summary: Mark as shipped
+                value:
+                  status: shipped
+              deliver:
+                summary: Mark as delivered
+                value:
+                  status: delivered
+              cancel:
+                summary: Cancel the order
+                value:
+                  status: canceled
+      responses:
+        "200":
+          description: Status updated; the full updated order is returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          description: The `status` key was absent from the request body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: Status field is required
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+
+  # ── Shared parameters ──────────────────────────────────────────────────────
+  parameters:
+    CategoryId:
+      name: category_id
+      in: path
+      required: true
+      description: Integer identifier of the category.
+      schema:
+        type: integer
+        example: 1
+
+    ProductId:
+      name: product_id
+      in: path
+      required: true
+      description: Integer identifier of the product.
+      schema:
+        type: integer
+        example: 1
+
+    CustomerId:
+      name: customer_id
+      in: path
+      required: true
+      description: Integer identifier of the customer.
+      schema:
+        type: integer
+        example: 1
+
+    OrderId:
+      name: order_id
+      in: path
+      required: true
+      description: Integer identifier of the order.
+      schema:
+        type: integer
+        example: 1
+
+  # ── Shared responses ──────────────────────────────────────────────────────
+  responses:
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          example:
+            detail: Category with id 99 not found
+
+    UnprocessableEntity:
+      description: |
+        Validation error. Can be produced by:
+        - **Pydantic** field validation (e.g. `price ≤ 0`, malformed email address).
+        - **Service-layer** business-rule violations (e.g. unknown `category_id` on product create).
+
+        Pydantic errors return the `ValidationError` shape; service-layer errors return the
+        simpler `ErrorDetail` shape.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ValidationError"
+              - $ref: "#/components/schemas/ErrorDetail"
+          examples:
+            pydantic_field_error:
+              summary: Pydantic field validation failure
+              value:
+                detail:
+                  - loc: ["body", "price"]
+                    msg: Input should be greater than 0
+                    type: greater_than
+            business_rule_error:
+              summary: Service-layer business rule violation
+              value:
+                detail: Category with id 99 not found
+
+  # ── Schemas ────────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Enumerations ──────────────────────────────────────────────────────────
+    OrderStatus:
+      type: string
+      description: Lifecycle status of an order.
+      enum:
+        - pending
+        - processing
+        - shipped
+        - delivered
+        - canceled
+      example: pending
+
+    # ── Health ────────────────────────────────────────────────────────────────
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Always `"ok"` when the application is running.
+          example: ok
+
+    # ── Category ──────────────────────────────────────────────────────────────
+    CategoryCreate:
+      type: object
+      description: Payload for creating a new category.
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          description: Display name of the category.
+          example: Electronics
+        description:
+          type: string
+          nullable: true
+          description: Optional description of the category.
+          example: Gadgets and devices
+
+    CategoryUpdate:
+      type: object
+      description: Payload for a partial category update. All fields are optional.
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: New display name.
+          example: Consumer Electronics
+        description:
+          type: string
+          nullable: true
+          description: New description.
+          example: All consumer electronics and accessories
+
+    Category:
+      type: object
+      description: A product category as stored in the system.
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: integer
+          description: Auto-assigned unique identifier.
+          example: 1
+        name:
+          type: string
+          example: Electronics
+        description:
+          type: string
+          nullable: true
+          example: Gadgets and devices
+
+    CategoryWithProducts:
+      description: |
+        A category with its associated products inline.
+        **Not currently returned by any API endpoint** — schema defined for potential future use.
+      allOf:
+        - $ref: "#/components/schemas/Category"
+        - type: object
+          properties:
+            products:
+              type: array
+              items:
+                $ref: "#/components/schemas/Product"
+              default: []
+
+    # ── Product ───────────────────────────────────────────────────────────────
+    ProductCreate:
+      type: object
+      description: Payload for creating a new product.
+      required:
+        - name
+        - price
+        - sku
+        - category_id
+      properties:
+        name:
+          type: string
+          description: Product name.
+          example: Smartphone
+        description:
+          type: string
+          nullable: true
+          description: Optional product description.
+          example: Latest model
+        price:
+          type: number
+          format: float
+          minimum: 0
+          exclusiveMinimum: true
+          description: Unit price. Must be strictly greater than zero.
+          example: 699.99
+        sku:
+          type: string
+          description: Stock Keeping Unit — unique product code.
+          example: PHN-123
+        category_id:
+          type: integer
+          description: ID of an existing category this product belongs to.
+          example: 1
+
+    ProductUpdate:
+      type: object
+      description: Payload for a partial product update. All fields are optional.
+      properties:
+        name:
+          type: string
+          nullable: true
+          example: Flagship Smartphone
+        description:
+          type: string
+          nullable: true
+          example: Next-generation flagship
+        price:
+          type: number
+          format: float
+          minimum: 0
+          exclusiveMinimum: true
+          nullable: true
+          description: Updated price. Must be strictly greater than zero if provided.
+          example: 799.99
+        sku:
+          type: string
+          nullable: true
+          example: PHN-456
+        category_id:
+          type: integer
+          nullable: true
+          description: Updated category ID. Must reference an existing category if provided.
+          example: 2
+
+    Product:
+      type: object
+      description: A product as stored in the system, including its fully resolved category.
+      required:
+        - id
+        - name
+        - price
+        - sku
+        - category
+      properties:
+        id:
+          type: integer
+          description: Auto-assigned unique identifier.
+          example: 1
+        name:
+          type: string
+          example: Smartphone
+        description:
+          type: string
+          nullable: true
+          example: Latest model
+        price:
+          type: number
+          format: float
+          minimum: 0
+          exclusiveMinimum: true
+          example: 699.99
+        sku:
+          type: string
+          example: PHN-123
+        category:
+          $ref: "#/components/schemas/Category"
+
+    # ── Customer ──────────────────────────────────────────────────────────────
+    CustomerCreate:
+      type: object
+      description: Payload for registering a new customer.
+      required:
+        - first_name
+        - last_name
+        - email
+      properties:
+        first_name:
+          type: string
+          example: John
+        last_name:
+          type: string
+          example: Doe
+        email:
+          type: string
+          format: email
+          description: Valid email address, validated by Pydantic `EmailStr`.
+          example: john.doe@example.com
+        phone:
+          type: string
+          nullable: true
+          description: Optional phone number (no format enforced).
+          example: "+1-555-0100"
+
+    CustomerUpdate:
+      type: object
+      description: Payload for a partial customer update. All fields are optional.
+      properties:
+        first_name:
+          type: string
+          nullable: true
+          example: Jonathan
+        last_name:
+          type: string
+          nullable: true
+          example: Doe
+        email:
+          type: string
+          format: email
+          nullable: true
+          example: jonathan.doe@example.com
+        phone:
+          type: string
+          nullable: true
+          example: "+1-555-9999"
+
+    Customer:
+      type: object
+      description: A customer as stored in the system.
+      required:
+        - id
+        - first_name
+        - last_name
+        - email
+      properties:
+        id:
+          type: integer
+          description: Auto-assigned unique identifier.
+          example: 1
+        first_name:
+          type: string
+          example: John
+        last_name:
+          type: string
+          example: Doe
+        email:
+          type: string
+          format: email
+          example: john.doe@example.com
+        phone:
+          type: string
+          nullable: true
+          example: "+1-555-0100"
+
+    CustomerWithOrders:
+      description: |
+        A customer with their full order history.
+        **Not currently returned by any API endpoint** — schema defined for potential future use.
+      allOf:
+        - $ref: "#/components/schemas/Customer"
+        - type: object
+          properties:
+            orders:
+              type: array
+              items:
+                $ref: "#/components/schemas/Order"
+              default: []
+
+    # ── Order ─────────────────────────────────────────────────────────────────
+    OrderItemCreate:
+      type: object
+      description: A single line item within a new order.
+      required:
+        - product_id
+        - quantity
+      properties:
+        product_id:
+          type: integer
+          description: ID of an existing product to order.
+          example: 1
+        quantity:
+          type: integer
+          minimum: 1
+          description: Number of units ordered. Must be at least 1.
+          example: 2
+
+    OrderItemUpdate:
+      type: object
+      description: |
+        Payload for updating an order item.
+        **Not currently used by any endpoint** — schema defined for potential future use.
+      properties:
+        product_id:
+          type: integer
+          nullable: true
+          example: 2
+        quantity:
+          type: integer
+          minimum: 1
+          nullable: true
+          example: 3
+
+    OrderItem:
+      type: object
+      description: A fully resolved order line item, including the price snapshot and product details.
+      required:
+        - id
+        - product_id
+        - quantity
+        - price
+        - product
+      properties:
+        id:
+          type: integer
+          description: Auto-assigned unique identifier.
+          example: 1
+        product_id:
+          type: integer
+          example: 1
+        quantity:
+          type: integer
+          minimum: 1
+          example: 2
+        price:
+          type: number
+          format: float
+          description: |
+            Unit price of the product **at the time the order was placed**.
+            This value is snapshotted from `Product.price` during order creation and is
+            immutable — subsequent product price changes do not affect existing order items.
+          example: 699.99
+        product:
+          $ref: "#/components/schemas/Product"
+
+    OrderCreate:
+      type: object
+      description: Payload for placing a new order.
+      required:
+        - customer_id
+        - items
+      properties:
+        customer_id:
+          type: integer
+          description: ID of the customer placing the order. Must reference an existing customer.
+          example: 1
+        status:
+          allOf:
+            - $ref: "#/components/schemas/OrderStatus"
+          default: pending
+          description: Initial lifecycle status. Defaults to `pending` if omitted.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItemCreate"
+          minItems: 1
+          description: One or more line items. At least one item is required.
+
+    OrderUpdate:
+      type: object
+      description: |
+        Internal update schema used by the service layer when applying status transitions.
+        The public-facing endpoint for status updates uses `OrderStatusUpdate` instead.
+      properties:
+        status:
+          allOf:
+            - $ref: "#/components/schemas/OrderStatus"
+          nullable: true
+
+    OrderStatusUpdate:
+      type: object
+      description: |
+        Request body for `PUT /api/v1/orders/{order_id}/status`.
+
+        The route handler accepts a generic `dict[str, str]`; only the `status` key is consumed.
+        The value is passed as a raw string to the service layer — an unrecognised status
+        string will raise a runtime error rather than a structured 422.
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: New lifecycle status. Must be one of the `OrderStatus` enum values.
+          example: shipped
+
+    Order:
+      type: object
+      description: A fully resolved order including all metadata and line items.
+      required:
+        - id
+        - customer_id
+        - order_date
+        - status
+      properties:
+        id:
+          type: integer
+          description: Auto-assigned unique identifier.
+          example: 1
+        customer_id:
+          type: integer
+          description: ID of the customer who placed the order.
+          example: 1
+        order_date:
+          type: string
+          format: date-time
+          description: UTC timestamp when the order was created (ISO 8601).
+          example: "2026-06-09T10:30:00Z"
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderItem"
+          description: Line items belonging to this order.
+          default: []
+
+    # ── Error schemas ─────────────────────────────────────────────────────────
+    ErrorDetail:
+      type: object
+      description: |
+        Standard FastAPI `HTTPException` response body.
+        Returned for 400, 404, and service-layer 422 errors.
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Human-readable description of the error.
+          example: Category with id 99 not found
+
+    ValidationErrorItem:
+      type: object
+      description: A single field-level error produced by Pydantic v2.
+      properties:
+        loc:
+          type: array
+          items:
+            type: string
+          description: JSON path segments identifying the invalid field.
+          example: ["body", "price"]
+        msg:
+          type: string
+          description: Human-readable error description.
+          example: Input should be greater than 0
+        type:
+          type: string
+          description: Pydantic internal error code.
+          example: greater_than
+
+    ValidationError:
+      type: object
+      description: Pydantic / FastAPI 422 response body containing one or more field-level errors.
+      required:
+        - detail
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationErrorItem"
+          example:
+            - loc: ["body", "price"]
+              msg: Input should be greater than 0
+              type: greater_than
