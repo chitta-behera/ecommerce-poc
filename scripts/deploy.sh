@@ -16,9 +16,19 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 log "=== Deploying release: $RELEASE ==="
 
+# ── 0. Pre-flight checks ──────────────────────────────────────────────────────
+PYTHON=$(command -v python3.12 2>/dev/null || true)
+if [ -z "$PYTHON" ]; then
+  log "ERROR: python3.12 not found. Run on EC2:"
+  log "  sudo add-apt-repository ppa:deadsnakes/python -y"
+  log "  sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv"
+  exit 1
+fi
+log "Using Python: $($PYTHON --version)"
+
 # ── 1. Python virtual environment and dependencies ───────────────────────────
 log "Creating virtual environment..."
-python3.12 -m venv "$RELEASE_DIR/.venv"
+"$PYTHON" -m venv "$RELEASE_DIR/.venv"
 
 log "Installing dependencies..."
 "$RELEASE_DIR/.venv/bin/pip" install --upgrade pip --quiet
