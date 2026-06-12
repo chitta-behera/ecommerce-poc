@@ -29,8 +29,8 @@ log "Creating virtual environment..."
 "$PYTHON" -m venv "$RELEASE_DIR/.venv"
 
 log "Installing dependencies..."
-"$RELEASE_DIR/.venv/bin/pip" install --upgrade pip --quiet
-"$RELEASE_DIR/.venv/bin/pip" install -r "$RELEASE_DIR/requirements.txt" --quiet
+"$RELEASE_DIR/.venv/bin/pip" install --upgrade pip setuptools wheel --quiet
+"$RELEASE_DIR/.venv/bin/pip" install --prefer-binary -r "$RELEASE_DIR/requirements.txt" --quiet
 
 # ── 2. Shared configuration (.env) ───────────────────────────────────────────
 SHARED_ENV="$APP_DIR/shared/.env"
