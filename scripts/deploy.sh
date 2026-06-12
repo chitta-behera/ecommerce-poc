@@ -16,10 +16,10 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 log "=== Deploying release: $RELEASE ==="
 
-# ── 0. Pre-flight: verify Python 3.12 ────────────────────────────────────────
-PYTHON=$(command -v python3.12 2>/dev/null || true)
+# ── 0. Pre-flight: verify Python 3 ───────────────────────────────────────────
+PYTHON=$(command -v python3 2>/dev/null || true)
 if [ -z "$PYTHON" ]; then
-  log "ERROR: python3.12 not found. Bootstrap step should have installed it."
+  log "ERROR: python3 not found. Bootstrap step should have installed it."
   exit 1
 fi
 log "Using Python: $($PYTHON --version)"

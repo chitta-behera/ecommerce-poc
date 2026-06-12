@@ -83,36 +83,19 @@ jobs:
             log "Sudoers configured."
           fi
 
-          # Python 3.12
-          if ! command -v python3.12 &>/dev/null; then
-            log "Installing Python 3.12..."
-            sudo apt-get update -q
-            # Ubuntu 24.04+ has Python 3.12 in default repos; try that first
-            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv python3.12-dev -q 2>/dev/null; then
-              log "Python 3.12 installed from default repos."
-            else
-              # Ubuntu 22.04 fallback: use deadsnakes PPA
-              log "Default repos missing Python 3.12, adding deadsnakes PPA..."
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common -q
-              sudo add-apt-repository ppa:deadsnakes/python -y
-              sudo apt-get update -q
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv python3.12-dev -q
-            fi
-          fi
-          log "Python: $(python3.12 --version)"
-
-          # System packages
-          for pkg in rsync nginx curl; do
-            if ! command -v $pkg &>/dev/null; then
-              log "Installing $pkg..."
-              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y $pkg -q
-            fi
-          done
+          # All required packages in a single apt transaction (no PPA needed)
+          log "Updating package index..."
+          sudo apt-get update -q
+          log "Installing packages..."
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            python3 python3-venv python3-dev \
+            rsync nginx curl -q
+          log "Python: $(python3 --version)"
 
           # App directory structure
           sudo mkdir -p /opt/ecommerce-poc/{releases,shared,scripts}
           sudo chown -R "$USER:$USER" /opt/ecommerce-poc
-          log "App directories ready at /opt/ecommerce-poc"
+          log "App directories ready."
 
           log "Bootstrap complete."
           BOOTSTRAP
@@ -134,8 +117,8 @@ jobs:
             --exclude='.git/' \
             --exclude='.github/' \
             --exclude='.venv/' \
-            --exclude='**/__pycache__/' \
-            --exclude='**/*.pyc' \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
             --exclude='.pytest_cache/' \
             --exclude='test-results.xml' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
