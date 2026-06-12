@@ -16,14 +16,10 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 log "=== Deploying release: $RELEASE ==="
 
-# ── 0. Pre-flight: verify Python 3.12 ────────────────────────────────────────
-# Must use Python 3.12 to match CI and ensure pydantic-core pre-built wheels
-# are available. Python 3.14 (Ubuntu 26.04 default) has no pydantic-core wheel
-# and source compilation requires Rust which is not installed on the server.
-PYTHON=$(command -v python3.12 2>/dev/null || true)
+# ── 0. Pre-flight: verify Python 3 ───────────────────────────────────────────
+PYTHON=$(command -v python3 2>/dev/null || true)
 if [ -z "$PYTHON" ]; then
-  log "ERROR: python3.12 not found."
-  log "Bootstrap should have installed it via: apt-get install python3.12 python3.12-venv"
+  log "ERROR: python3 not found. Bootstrap step should have installed it."
   exit 1
 fi
 log "Using Python: $($PYTHON --version)"
