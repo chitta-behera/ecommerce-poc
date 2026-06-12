@@ -47,4 +47,4 @@ app.include_router(health.router)
 
 @app.get("/")
 def read_root():
-    return {"message": f"Welcome to the {settings.PROJECT_NAME}"}
+    return {"message": f"Welcome to {settings.PROJECT_NAME}"}
