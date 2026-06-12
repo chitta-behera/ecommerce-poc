@@ -16,12 +16,10 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
 log "=== Deploying release: $RELEASE ==="
 
-# ── 0. Pre-flight checks ──────────────────────────────────────────────────────
+# ── 0. Pre-flight: verify Python 3.12 ────────────────────────────────────────
 PYTHON=$(command -v python3.12 2>/dev/null || true)
 if [ -z "$PYTHON" ]; then
-  log "ERROR: python3.12 not found. Run on EC2:"
-  log "  sudo add-apt-repository ppa:deadsnakes/python -y"
-  log "  sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv"
+  log "ERROR: python3.12 not found. Bootstrap step should have installed it."
   exit 1
 fi
 log "Using Python: $($PYTHON --version)"
@@ -38,32 +36,46 @@ log "Installing dependencies..."
 SHARED_ENV="$APP_DIR/shared/.env"
 if [ -f "$SHARED_ENV" ]; then
   cp "$SHARED_ENV" "$RELEASE_DIR/.env"
-  log "Shared .env applied from $SHARED_ENV"
-else
-  log "No shared .env found at $SHARED_ENV — skipping."
+  log "Shared .env applied."
 fi
 
-# ── 3. Record current release as the rollback target ─────────────────────────
+# ── 3. Install / update systemd service ──────────────────────────────────────
+log "Installing systemd service..."
+sudo cp "$RELEASE_DIR/config/ecommerce-poc.service" /etc/systemd/system/ecommerce-poc.service
+sudo systemctl daemon-reload
+sudo systemctl enable ecommerce-poc --quiet
+log "Service installed and enabled."
+
+# ── 4. Install / update Nginx config ─────────────────────────────────────────
+log "Configuring Nginx..."
+sudo cp "$RELEASE_DIR/config/nginx.conf" /etc/nginx/sites-available/ecommerce-poc
+sudo ln -sf /etc/nginx/sites-available/ecommerce-poc /etc/nginx/sites-enabled/ecommerce-poc
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t
+sudo systemctl enable nginx --quiet
+sudo systemctl reload nginx 2>/dev/null || sudo systemctl start nginx
+log "Nginx configured."
+
+# ── 5. Record current release as the rollback target ─────────────────────────
 if [ -L "$CURRENT_LINK" ]; then
   PREVIOUS=$(readlink "$CURRENT_LINK")
   echo "$PREVIOUS" > "$APP_DIR/.previous_release"
   log "Previous release saved for rollback: $(basename "$PREVIOUS")"
 fi
 
-# ── 4. Promote new release (atomic symlink swap) ─────────────────────────────
+# ── 6. Promote new release (atomic symlink swap) ─────────────────────────────
 log "Switching symlink to new release..."
 ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
 
-# ── 5. Publish scripts to stable path (required by rollback.yml workflow) ────
-mkdir -p "$APP_DIR/scripts"
+# ── 7. Publish scripts to stable path (required by rollback.yml workflow) ────
 cp "$RELEASE_DIR/scripts/"*.sh "$APP_DIR/scripts/"
 chmod +x "$APP_DIR/scripts/"*.sh
 
-# ── 6. Restart application service ───────────────────────────────────────────
+# ── 8. Restart application service ───────────────────────────────────────────
 log "Restarting ecommerce-poc service..."
 sudo systemctl restart ecommerce-poc
 
-# ── 7. Confirm service is active ─────────────────────────────────────────────
+# ── 9. Confirm service is active ─────────────────────────────────────────────
 RETRIES=0
 until systemctl is-active --quiet ecommerce-poc || [ $RETRIES -ge 10 ]; do
   RETRIES=$((RETRIES + 1))
@@ -76,7 +88,7 @@ if ! systemctl is-active --quiet ecommerce-poc; then
   exit 1
 fi
 
-# ── 8. Prune old releases (keep KEEP_RELEASES most recent) ───────────────────
+# ── 10. Prune old releases (keep KEEP_RELEASES most recent) ──────────────────
 log "Pruning old releases (keeping last $KEEP_RELEASES)..."
 ls -dt "$RELEASES_DIR"/*/ 2>/dev/null \
   | tail -n "+$((KEEP_RELEASES + 1))" \

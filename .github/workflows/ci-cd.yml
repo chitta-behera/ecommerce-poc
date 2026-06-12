@@ -69,6 +69,46 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
+      - name: Bootstrap EC2 server (idempotent)
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" 'bash -s' << 'BOOTSTRAP'
+          set -e
+          log() { echo "[BOOTSTRAP] $*"; }
+
+          # Passwordless sudo for all deployment operations
+          if [ ! -f /etc/sudoers.d/ecommerce-poc ]; then
+            echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/ecommerce-poc > /dev/null
+            log "Sudoers configured."
+          fi
+
+          # Python 3.12
+          if ! command -v python3.12 &>/dev/null; then
+            log "Installing Python 3.12..."
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common -q
+            sudo add-apt-repository ppa:deadsnakes/python -y
+            sudo apt-get update -q
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y python3.12 python3.12-venv python3.12-dev -q
+          fi
+          log "Python: $(python3.12 --version)"
+
+          # System packages
+          for pkg in rsync nginx curl; do
+            if ! command -v $pkg &>/dev/null; then
+              log "Installing $pkg..."
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y $pkg -q
+            fi
+          done
+
+          # App directory structure
+          sudo mkdir -p /opt/ecommerce-poc/{releases,shared,scripts}
+          sudo chown -R "$USER:$USER" /opt/ecommerce-poc
+          log "App directories ready at /opt/ecommerce-poc"
+
+          log "Bootstrap complete."
+          BOOTSTRAP
+
       - name: Generate release identifier
         id: vars
         run: echo "release=$(date +%Y%m%d_%H%M%S)_${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
