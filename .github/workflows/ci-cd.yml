@@ -16,7 +16,7 @@ jobs:
   # CI — Run tests on every push and pull request
   # ─────────────────────────────────────────────────────────────────────────
   test:
-    name: Test (Python ${{ env.PYTHON_VERSION }})
+    name: Test (Python 3.12)
     runs-on: ubuntu-latest
 
     steps:
@@ -53,9 +53,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment:
-      name: production
-      url: http://${{ secrets.EC2_HOST }}
+    environment: production
 
     steps:
       - name: Checkout code
