@@ -83,14 +83,17 @@ jobs:
             log "Sudoers configured."
           fi
 
-          # All required packages in a single apt transaction (no PPA needed)
+          # All required packages in a single apt transaction
+          # Python 3.12 is in Ubuntu 24.04+ default repos (no PPA needed) and
+          # matches the CI environment exactly, avoiding wheel-compatibility issues.
           log "Updating package index..."
           sudo apt-get update -q
           log "Installing packages..."
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            python3 python3-pip python3-venv python3-dev build-essential \
+            python3.12 python3.12-venv python3.12-dev \
+            python3-pip build-essential \
             rsync nginx curl -q
-          log "Python: $(python3 --version)"
+          log "Python: $(python3.12 --version)"
 
           # App directory structure
           sudo mkdir -p /opt/ecommerce-poc/{releases,shared,scripts}
